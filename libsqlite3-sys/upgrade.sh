@@ -16,6 +16,9 @@ unzip -p "$SQLITE.zip" "$SQLITE/sqlite3.h" > "$SQLITE3_LIB_DIR/sqlite3.h"
 unzip -p "$SQLITE.zip" "$SQLITE/sqlite3ext.h" > "$SQLITE3_LIB_DIR/sqlite3ext.h"
 rm -f "$SQLITE.zip"
 
+# Apply local fixes before generating bindings or compiling SQLite.
+"${PYTHON:-python3}" "$SCRIPT_DIR/apply_sqlite_patches.py" apply
+
 export SQLITE3_INCLUDE_DIR="$SQLITE3_LIB_DIR"
 # Regenerate bindgen file for sqlite3.h
 rm -f "$SQLITE3_LIB_DIR/bindgen_bundled_version.rs"

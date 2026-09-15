@@ -1,3 +1,5 @@
 libsqlite3-sys/sqlite3/* linguist-vendored
 libsqlite3-sys/sqlcipher/* linguist-vendored
 libsqlite3-sys/bindgen-bindings/* linguist-generated
+dev724-bench/measurements/** text eol=lf
+libsqlite3-sys/patches/*.patch whitespace=-blank-at-eol

@@ -1,0 +1,55 @@
+diff --git a/libsqlite3-sys/sqlite3/sqlite3.c b/libsqlite3-sys/sqlite3/sqlite3.c
+index 0765877..3d1b862 100644
+--- a/libsqlite3-sys/sqlite3/sqlite3.c
++++ b/libsqlite3-sys/sqlite3/sqlite3.c
+@@ -264678,15 +264678,47 @@ static int fts5StorageContentlessDelete(Fts5Storage *p, i64 iDel){
+        || p->pConfig->eContent==FTS5_CONTENT_UNINDEXED
+   );
+ 
+-  /* Look up the origin of the document in the %_docsize table. Store
+-  ** this in stack variable iOrigin.  */
++  /* Look up the origin and column sizes in the %_docsize table. Deleting
++  ** a live document must also remove its contribution to the averages
++  ** record. Reuse this lookup so no additional SQL or tokenization is
++  ** required. */
+   rc = fts5StorageGetStmt(p, FTS5_STMT_LOOKUP_DOCSIZE, &pLookup, 0);
+   if( rc==SQLITE_OK ){
+     sqlite3_bind_int64(pLookup, 1, iDel);
+     if( SQLITE_ROW==sqlite3_step(pLookup) ){
++      const u8 *aBlob = sqlite3_column_blob(pLookup, 0);
++      int nBlob = sqlite3_column_bytes(pLookup, 0);
++      int iOff = 0;
++      int i;
+       iOrigin = sqlite3_column_int64(pLookup, 1);
++      for(i=0; rc==SQLITE_OK && i<p->pConfig->nCol; i++){
++        int nToken = 0;
++        int iEnd = iOff;
++        /* Check the varint boundary before decoding a stored size. */
++        while( iEnd<nBlob && iEnd-iOff<8 && (aBlob[iEnd]&0x80) ) iEnd++;
++        if( iEnd>=nBlob ){
++          rc = FTS5_CORRUPT;
++        }else{
++          iOff += fts5GetVarint32(&aBlob[iOff], nToken);
++          if( nToken<0 || p->aTotalSize[i]<nToken ){
++            rc = FTS5_CORRUPT;
++          }else{
++            p->aTotalSize[i] -= nToken;
++          }
++        }
++      }
++      if( rc==SQLITE_OK ){
++        if( iOff!=nBlob || p->nTotalRow<1 ){
++          rc = FTS5_CORRUPT;
++        }else{
++          p->nTotalRow--;
++        }
++      }
++    }
++    {
++      int rc2 = sqlite3_reset(pLookup);
++      if( rc==SQLITE_OK ) rc = rc2;
+     }
+-    rc = sqlite3_reset(pLookup);
+   }
+ 
+   if( rc==SQLITE_OK && iOrigin!=0 ){

@@ -46,6 +46,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+      - name: Check bundled SQLite patches
+        run: python libsqlite3-sys/apply_sqlite_patches.py check
+      - name: Test SQLite patch maintenance
+        run: python -m unittest discover -s libsqlite3-sys/tests -p test_sqlite_patches.py
       # This has a matcher for test panics, so we use it even though elsewhere
       # we use actions-rs/toolchain.
       - uses: hecrj/setup-rust-action@v2

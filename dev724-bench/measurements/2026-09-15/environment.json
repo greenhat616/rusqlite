@@ -1,0 +1,12 @@
+{
+  "platform": "Windows-11-10.0.26200-SP0",
+  "affinity_mask": 4,
+  "started": "2026-09-15T13:52:33+0800",
+  "git_head": "726c921a350591abffdc99ac8d8a5bea21fbb208",
+  "rustc": "rustc 1.100.0-nightly (574ff7d98 2026-09-14)",
+  "binaries": {
+    "unpatched.exe": "64cb01e6ab343684e1d425ee4ff505b7ef584e83b057135246a0eff18842eabe",
+    "patched.exe": "02a07db7d32bb6c52ea4a4146fd4260c169e673d61e8604ae290def8bd31b223"
+  },
+  "source_patch_sha256": "bcd6afddb6999332ffa371df1c42b70bc72e7f1729413d9b214fa2b0e1732be7"
+}
