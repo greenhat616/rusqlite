@@ -47,5 +47,11 @@ SQLite are separate dependencies.
 | Patch | Upstream base | Reason | Regression tests |
 |---|---|---|---|
 | `0001-fts5-contentless-delete-statistics.patch` | SQLite 3.53.2 (rusqlite v0.40.2) | DEV-724: subtract deleted document sizes and row count using the existing docsize lookup | `cargo test --manifest-path dev724-bench/Cargo.toml --release --locked` |
+| `0002-fts5-recount-totals.patch` | 0001 | DEV-724: add the `'recount-totals'` command, which rebuilds the averages record from `%_docsize` | same as 0001 |
 
-The DEV-724 patch fixes future maintenance, not existing historical overcounts.
+0001 fixes future maintenance only; it does not erase overcounts that existing
+databases already store. 0002 repairs them: run
+`INSERT INTO t(t) VALUES('recount-totals')` once per existing table. It needs
+`columnsize=1`, reads stored sizes without tokenizing content, and follows the
+enclosing transaction (a rollback discards the recount). SQLite builds without
+this series reject the command with an error instead of silently ignoring it.

@@ -1,0 +1,103 @@
+diff --git a/libsqlite3-sys/sqlite3/sqlite3.c b/libsqlite3-sys/sqlite3/sqlite3.c
+index 3d1b862..2096c58 100644
+--- a/libsqlite3-sys/sqlite3/sqlite3.c
++++ b/libsqlite3-sys/sqlite3/sqlite3.c
+@@ -242617,6 +242617,7 @@ static int sqlite3Fts5StorageConfigValue(
+ 
+ static int sqlite3Fts5StorageDeleteAll(Fts5Storage *p);
+ static int sqlite3Fts5StorageRebuild(Fts5Storage *p);
++static int sqlite3Fts5StorageRecountTotals(Fts5Storage *p);
+ static int sqlite3Fts5StorageOptimize(Fts5Storage *p);
+ static int sqlite3Fts5StorageMerge(Fts5Storage *p, int nMerge);
+ static int sqlite3Fts5StorageReset(Fts5Storage *p);
+@@ -261937,6 +261938,15 @@ static int fts5SpecialInsert(
+       rc = sqlite3Fts5StorageRebuild(pTab->pStorage);
+     }
+     bLoadConfig = 1;
++  }else if( 0==sqlite3_stricmp("recount-totals", zCmd) ){
++    if( pConfig->bColumnsize==0 ){
++      fts5SetVtabError(pTab,
++          "'recount-totals' may only be used with a columnsize=1 fts5 table"
++      );
++      rc = SQLITE_ERROR;
++    }else{
++      rc = sqlite3Fts5StorageRecountTotals(pTab->pStorage);
++    }
+   }else if( 0==sqlite3_stricmp("optimize", zCmd) ){
+     rc = sqlite3Fts5StorageOptimize(pTab->pStorage);
+   }else if( 0==sqlite3_stricmp("merge", zCmd) ){
+@@ -265519,6 +265529,74 @@ static int sqlite3Fts5StorageDocsize(Fts5Storage *p, i64 iRowid, int *aCol){
+   return rc;
+ }
+ 
++/*
++** Recompute the averages record from the %_docsize table. Totals written
++** before contentless deletes maintained them overcount rows and tokens.
++** Only stored sizes are read: no content is read and nothing is
++** tokenized. The result replaces the cached totals, so later writes in
++** the same transaction build on it and a rollback discards it.
++*/
++static int sqlite3Fts5StorageRecountTotals(Fts5Storage *p){
++  Fts5Config *pConfig = p->pConfig;
++  int nCol = pConfig->nCol;
++  sqlite3_stmt *pScan = 0;
++  i64 nRow = 0;
++  i64 *aTotal;
++  int rc = SQLITE_OK;
++
++  assert( pConfig->bColumnsize );
++  aTotal = (i64*)sqlite3Fts5MallocZero(&rc, nCol*sizeof(i64));
++  if( rc==SQLITE_OK ){
++    char *zSql = sqlite3_mprintf("SELECT sz FROM %Q.'%q_docsize'",
++        pConfig->zDb, pConfig->zName
++    );
++    if( zSql==0 ){
++      rc = SQLITE_NOMEM;
++    }else{
++      rc = sqlite3_prepare_v2(pConfig->db, zSql, -1, &pScan, 0);
++      sqlite3_free(zSql);
++    }
++  }
++
++  while( rc==SQLITE_OK && SQLITE_ROW==sqlite3_step(pScan) ){
++    const u8 *aBlob = sqlite3_column_blob(pScan, 0);
++    int nBlob = sqlite3_column_bytes(pScan, 0);
++    int iOff = 0;
++    int i;
++    for(i=0; rc==SQLITE_OK && i<nCol; i++){
++      int nToken = 0;
++      int iEnd = iOff;
++      /* Check the varint boundary before decoding a stored size. */
++      while( iEnd<nBlob && iEnd-iOff<8 && (aBlob[iEnd]&0x80) ) iEnd++;
++      if( iEnd>=nBlob ){
++        rc = FTS5_CORRUPT;
++      }else{
++        iOff += fts5GetVarint32(&aBlob[iOff], nToken);
++        if( nToken<0 ){
++          rc = FTS5_CORRUPT;
++        }else{
++          aTotal[i] += nToken;
++        }
++      }
++    }
++    if( rc==SQLITE_OK && iOff!=nBlob ) rc = FTS5_CORRUPT;
++    nRow++;
++  }
++  if( pScan ){
++    int rc2 = sqlite3_finalize(pScan);
++    if( rc==SQLITE_OK ) rc = rc2;
++  }
++
++  if( rc==SQLITE_OK ){
++    memcpy(p->aTotalSize, aTotal, nCol*sizeof(i64));
++    p->nTotalRow = nRow;
++    p->bTotalsValid = 1;
++    rc = fts5StorageSaveTotals(p);
++  }
++  sqlite3_free(aTotal);
++  return rc;
++}
++
+ static int sqlite3Fts5StorageSize(Fts5Storage *p, int iCol, i64 *pnToken){
+   int rc = fts5StorageLoadTotals(p, 0);
+   if( rc==SQLITE_OK ){

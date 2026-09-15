@@ -88,6 +88,13 @@ co-located tokens, and comparison with a fresh index after 2,000 deterministic
 mutations. Built-in BM25 scores are compared for terms, OR queries, and
 phrases. Benchmarks additionally check optimize and close/reopen behavior.
 
+The `'recount-totals'` tests forge inflated totals (as an unpatched SQLite
+leaves them) and check that the recount restores native statistics, passes
+`integrity-check` on normal content tables (which verifies totals against
+content), and matches a fresh index's built-in BM25 scores. They also cover
+rollback and savepoint rollback of a recount, writes before and after a recount
+in one transaction, `columnsize=0` rejection, and truncated size records.
+
 The unpatched build fails the first repeated-replacement assertion: native
 statistics become `(4,12)` while live rows remain `(3,7)`. `integrity-check`
 alone is insufficient to catch this particular contentless statistics defect.

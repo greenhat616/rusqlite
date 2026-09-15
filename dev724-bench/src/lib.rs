@@ -316,6 +316,13 @@ mod tests {
                 }
             }
             assert_eq!(native(&conn, "ft")?, native(&conn, "fresh")?);
+            // Simulate totals inflated by an unpatched SQLite, then repair them.
+            let (rows, tokens) = native(&conn, "ft")?;
+            forge_totals(&conn, rows as u64 + 40, &[tokens as u64 + 900, 300, 0]);
+            assert_ne!(native(&conn, "ft")?, native(&conn, "fresh")?);
+            recount(&conn)?;
+            assert_eq!(native(&conn, "ft")?, native(&conn, "fresh")?);
+            conn.execute_batch("INSERT INTO ft(ft) VALUES('integrity-check')")?;
             for query in ["needle", "word", "needle OR other", "\"word word\""] {
                 let read = |table: &str| -> Result<Vec<(i64, f64)>> {
                     let mut stmt=conn.prepare(&format!("SELECT rowid,bm25({table}) FROM {table} WHERE {table} MATCH ?1 ORDER BY rowid"))?;
@@ -333,6 +340,28 @@ mod tests {
         assert_eq!(native(conn, "ft").unwrap(), expected);
         conn.execute_batch("INSERT INTO ft(ft) VALUES('integrity-check')")
             .unwrap();
+    }
+
+    /// Overwrites the averages record, simulating totals left by an unpatched SQLite.
+    fn forge_totals(conn: &Connection, rows: u64, columns: &[u64]) {
+        let mut record = Vec::new();
+        for value in std::iter::once(rows).chain(columns.iter().copied()) {
+            // SQLite varint (values below 2^56): big-endian 7-bit groups, high bit
+            // set on every byte except the last.
+            let mut groups = vec![(value & 0x7f) as u8];
+            let mut rest = value >> 7;
+            while rest != 0 {
+                groups.push((rest & 0x7f) as u8 | 0x80);
+                rest >>= 7;
+            }
+            record.extend(groups.iter().rev());
+        }
+        conn.execute("UPDATE ft_data SET block=?1 WHERE id=1", [record])
+            .unwrap();
+    }
+
+    fn recount(conn: &Connection) -> Result<()> {
+        conn.execute_batch("INSERT INTO ft(ft) VALUES('recount-totals')")
     }
 
     #[test]
@@ -386,6 +415,45 @@ mod tests {
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )?;
         assert_eq!(cols, (1, 0, 0));
+
+        // 'recount-totals' repairs totals inflated before deletes maintained them.
+        conn.execute_batch(
+            "INSERT INTO ft(rowid,a,b,c) VALUES(2,'x y','z','ignored'),(3,'','w','ignored')",
+        )?;
+        check(&conn, (3, 5));
+        forge_totals(&conn, 9, &[40, 30, 0]);
+        assert_eq!(native(&conn, "ft")?, (9, 70));
+        conn.execute_batch("BEGIN")?;
+        recount(&conn)?;
+        check(&conn, (3, 5));
+        conn.execute_batch("ROLLBACK")?;
+        assert_eq!(native(&conn, "ft")?, (9, 70));
+        conn.execute_batch("SAVEPOINT s")?;
+        recount(&conn)?;
+        conn.execute_batch("ROLLBACK TO s; RELEASE s")?;
+        assert_eq!(native(&conn, "ft")?, (9, 70));
+        // Writes on both sides of a recount in one transaction build on exact totals.
+        conn.execute_batch(
+            "BEGIN;
+            INSERT OR REPLACE INTO ft(rowid,a,b,c) VALUES(2,'x y z','','ignored');
+            INSERT INTO ft(ft) VALUES('recount-totals');
+            DELETE FROM ft WHERE rowid=3;
+            INSERT OR REPLACE INTO ft(rowid,a,b,c) VALUES(4,'p','q r','ignored');
+            COMMIT;",
+        )?;
+        check(&conn, (3, 7));
+        recount(&conn)?;
+        check(&conn, (3, 7));
+
+        // Without stored sizes there is nothing to recount from.
+        conn.execute_batch("CREATE VIRTUAL TABLE nosize USING fts5(a, columnsize=0)")?;
+        let error = conn
+            .execute_batch("INSERT INTO nosize(nosize) VALUES('recount-totals')")
+            .unwrap_err();
+        assert!(error.to_string().contains("columnsize=1"), "{error}");
+        // A truncated size record is reported as corruption, not read past its end.
+        conn.execute_batch("UPDATE ft_docsize SET sz=x'81' WHERE id=1")?;
+        assert!(recount(&conn).is_err());
         Ok(())
     }
 }
